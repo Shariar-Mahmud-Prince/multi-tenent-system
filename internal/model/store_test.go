@@ -1,0 +1,120 @@
+package model_test
+
+import (
+	"testing"
+
+	"multi-tenant-domains/internal/model"
+)
+
+func TestCleanDomain(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"example.com", "example.com"},
+		{"  EXAMPLE.COM  ", "example.com"},
+		{"http://example.com", "example.com"},
+		{"https://shop.acme.org:8443/", "shop.acme.org"},
+		{"sub.domain.test:8080", "sub.domain.test"},
+		{"store.test.", "store.test"},
+		{"HTTPS://MYSTORE.COM/PATH", "mystore.com"},
+	}
+
+	for _, tt := range tests {
+		actual := model.CleanDomain(tt.input)
+		if actual != tt.expected {
+			t.Errorf("CleanDomain(%q) = %q; want %q", tt.input, actual, tt.expected)
+		}
+	}
+}
+
+func TestCreateStoreRequest_Validate(t *testing.T) {
+	baseDomain := "yourplatform.test"
+
+	tests := []struct {
+		name      string
+		req       model.CreateStoreRequest
+		expectErr bool
+	}{
+		{
+			name: "Valid request",
+			req: model.CreateStoreRequest{
+				Name:      "Valid Store",
+				Subdomain: "valid-store",
+			},
+			expectErr: false,
+		},
+		{
+			name: "Empty name",
+			req: model.CreateStoreRequest{
+				Name:      "",
+				Subdomain: "mystore",
+			},
+			expectErr: true,
+		},
+		{
+			name: "Reserved subdomain",
+			req: model.CreateStoreRequest{
+				Name:      "Admin Store",
+				Subdomain: "admin",
+			},
+			expectErr: true,
+		},
+		{
+			name: "Too short subdomain",
+			req: model.CreateStoreRequest{
+				Name:      "Short Store",
+				Subdomain: "ab",
+			},
+			expectErr: true,
+		},
+		{
+			name: "Invalid characters in subdomain",
+			req: model.CreateStoreRequest{
+				Name:      "Invalid Store",
+				Subdomain: "my_store!",
+			},
+			expectErr: true,
+		},
+		{
+			name: "Subdomain starting with hyphen",
+			req: model.CreateStoreRequest{
+				Name:      "Hyphen Store",
+				Subdomain: "-invalid",
+			},
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.req.Validate(baseDomain)
+			if (err != nil) != tt.expectErr {
+				t.Errorf("Validate() error = %v, expectErr = %v", err, tt.expectErr)
+			}
+		})
+	}
+}
+
+func TestValidateCustomDomain(t *testing.T) {
+	baseDomain := "yourplatform.test"
+
+	tests := []struct {
+		domain    string
+		expectErr bool
+	}{
+		{"example.com", false},
+		{"shop.mybrand.org", false},
+		{"", true},
+		{"yourplatform.test", true},
+		{"sub.yourplatform.test", true},
+		{"invalid-domain", true},
+	}
+
+	for _, tt := range tests {
+		err := model.ValidateCustomDomain(tt.domain, baseDomain)
+		if (err != nil) != tt.expectErr {
+			t.Errorf("ValidateCustomDomain(%q) error = %v; expectErr = %v", tt.domain, err, tt.expectErr)
+		}
+	}
+}
