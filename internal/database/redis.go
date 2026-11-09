@@ -54,8 +54,8 @@ func (r *RedisClient) Close() error {
 	return r.client.Close()
 }
 
-// GetCachedStore fetches a cached tenant store by host header.
-func (r *RedisClient) GetCachedStore(ctx context.Context, host string) (*model.Store, bool) {
+// GetCachedTenant fetches a cached tenant workspace by host header.
+func (r *RedisClient) GetCachedTenant(ctx context.Context, host string) (*model.Tenant, bool) {
 	if r == nil || r.client == nil {
 		return nil, false
 	}
@@ -66,21 +66,26 @@ func (r *RedisClient) GetCachedStore(ctx context.Context, host string) (*model.S
 		return nil, false
 	}
 
-	var store model.Store
-	if err := json.Unmarshal([]byte(val), &store); err != nil {
+	var tenant model.Tenant
+	if err := json.Unmarshal([]byte(val), &tenant); err != nil {
 		return nil, false
 	}
 
-	return &store, true
+	return &tenant, true
 }
 
-// SetCachedStore caches a tenant store for a specified TTL.
-func (r *RedisClient) SetCachedStore(ctx context.Context, host string, store *model.Store, ttl time.Duration) {
-	if r == nil || r.client == nil || store == nil {
+// GetCachedStore is a backward-compatible alias.
+func (r *RedisClient) GetCachedStore(ctx context.Context, host string) (*model.Store, bool) {
+	return r.GetCachedTenant(ctx, host)
+}
+
+// SetCachedTenant caches a tenant workspace for a specified TTL.
+func (r *RedisClient) SetCachedTenant(ctx context.Context, host string, tenant *model.Tenant, ttl time.Duration) {
+	if r == nil || r.client == nil || tenant == nil {
 		return
 	}
 
-	data, err := json.Marshal(store)
+	data, err := json.Marshal(tenant)
 	if err != nil {
 		return
 	}
@@ -89,20 +94,30 @@ func (r *RedisClient) SetCachedStore(ctx context.Context, host string, store *mo
 	_ = r.client.Set(ctx, key, data, ttl).Err()
 }
 
-// InvalidateStoreCache invalidates cache entries associated with a store's hostnames.
-func (r *RedisClient) InvalidateStoreCache(ctx context.Context, baseDomain string, store *model.Store) {
-	if r == nil || r.client == nil || store == nil {
+// SetCachedStore is a backward-compatible alias.
+func (r *RedisClient) SetCachedStore(ctx context.Context, host string, store *model.Store, ttl time.Duration) {
+	r.SetCachedTenant(ctx, host, store, ttl)
+}
+
+// InvalidateTenantCache invalidates cache entries associated with a tenant's hostnames.
+func (r *RedisClient) InvalidateTenantCache(ctx context.Context, baseDomain string, tenant *model.Tenant) {
+	if r == nil || r.client == nil || tenant == nil {
 		return
 	}
 
 	keys := []string{
-		fmt.Sprintf("tenant:host:%s", store.FullSubdomain(baseDomain)),
+		fmt.Sprintf("tenant:host:%s", tenant.FullSubdomain(baseDomain)),
 	}
-	if store.CustomDomain != nil && *store.CustomDomain != "" {
-		keys = append(keys, fmt.Sprintf("tenant:host:%s", *store.CustomDomain))
+	if tenant.CustomDomain != nil && *tenant.CustomDomain != "" {
+		keys = append(keys, fmt.Sprintf("tenant:host:%s", *tenant.CustomDomain))
 	}
 
 	_ = r.client.Del(ctx, keys...).Err()
+}
+
+// InvalidateStoreCache is a backward-compatible alias.
+func (r *RedisClient) InvalidateStoreCache(ctx context.Context, baseDomain string, store *model.Store) {
+	r.InvalidateTenantCache(ctx, baseDomain, store)
 }
 
 // AllowRateLimit checks if an IP is allowed under a sliding window limit using Redis.

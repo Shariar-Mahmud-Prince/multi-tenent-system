@@ -19,22 +19,25 @@ import (
 	"multi-tenant-domains/internal/service"
 )
 
-// StoreHandler handles store management HTTP endpoints.
-type StoreHandler struct {
-	repo        repository.StoreRepository
+// TenantHandler handles tenant workspace management HTTP endpoints.
+type TenantHandler struct {
+	repo        repository.TenantRepository
 	cfg         *config.Config
 	redisClient *database.RedisClient
 	dnsVerifier service.DNSVerifier
 }
 
-// NewStoreHandler creates a new StoreHandler instance.
-func NewStoreHandler(
-	repo repository.StoreRepository,
+// Backward compatibility alias
+type StoreHandler = TenantHandler
+
+// NewTenantHandler creates a new TenantHandler instance.
+func NewTenantHandler(
+	repo repository.TenantRepository,
 	cfg *config.Config,
 	redisClient *database.RedisClient,
 	dnsVerifier service.DNSVerifier,
-) *StoreHandler {
-	return &StoreHandler{
+) *TenantHandler {
+	return &TenantHandler{
 		repo:        repo,
 		cfg:         cfg,
 		redisClient: redisClient,
@@ -42,9 +45,19 @@ func NewStoreHandler(
 	}
 }
 
-// CreateStore handles POST /api/v1/stores
-func (h *StoreHandler) CreateStore(w http.ResponseWriter, r *http.Request) {
-	var req model.CreateStoreRequest
+// NewStoreHandler is a backward-compatible constructor.
+func NewStoreHandler(
+	repo repository.StoreRepository,
+	cfg *config.Config,
+	redisClient *database.RedisClient,
+	dnsVerifier service.DNSVerifier,
+) *StoreHandler {
+	return NewTenantHandler(repo, cfg, redisClient, dnsVerifier)
+}
+
+// CreateTenant handles POST /api/v1/tenants
+func (h *TenantHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
+	var req model.CreateTenantRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON payload: " + err.Error()})
 		return
@@ -60,7 +73,7 @@ func (h *StoreHandler) CreateStore(w http.ResponseWriter, r *http.Request) {
 		ownerID = &claims.UserID
 	}
 
-	store := model.Store{
+	tenant := model.Tenant{
 		OwnerID:      ownerID,
 		Name:         req.Name,
 		Subdomain:    req.Subdomain,
@@ -69,46 +82,54 @@ func (h *StoreHandler) CreateStore(w http.ResponseWriter, r *http.Request) {
 		IsActive:     true,
 	}
 
-	if err := h.repo.CreateStore(r.Context(), &store); err != nil {
+	if err := h.repo.CreateTenant(r.Context(), &tenant); err != nil {
 		if errors.Is(err, repository.ErrSubdomainTaken) {
-			respondJSON(w, http.StatusConflict, map[string]string{"error": "Subdomain is already registered to another store"})
+			respondJSON(w, http.StatusConflict, map[string]string{"error": "Subdomain is already registered to another tenant"})
 			return
 		}
 		if errors.Is(err, repository.ErrCustomDomainTaken) {
-			respondJSON(w, http.StatusConflict, map[string]string{"error": "Custom domain is already registered to another store"})
+			respondJSON(w, http.StatusConflict, map[string]string{"error": "Custom domain is already registered to another tenant"})
 			return
 		}
-		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create store: " + err.Error()})
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create tenant: " + err.Error()})
 		return
 	}
 
-	respondJSON(w, http.StatusCreated, store.ToResponse(h.cfg.BaseDomain, h.cfg.ServerIP))
+	respondJSON(w, http.StatusCreated, tenant.ToResponse(h.cfg.BaseDomain, h.cfg.ServerIP))
 }
 
-// GetStore handles GET /api/v1/stores/{id}
-func (h *StoreHandler) GetStore(w http.ResponseWriter, r *http.Request) {
+func (h *TenantHandler) CreateStore(w http.ResponseWriter, r *http.Request) {
+	h.CreateTenant(w, r)
+}
+
+// GetTenant handles GET /api/v1/tenants/{id}
+func (h *TenantHandler) GetTenant(w http.ResponseWriter, r *http.Request) {
 	idParam := chi.URLParam(r, "id")
 	id, err := uuid.Parse(idParam)
 	if err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid store UUID format"})
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid tenant UUID format"})
 		return
 	}
 
-	store, err := h.repo.GetStoreByID(r.Context(), id)
+	tenant, err := h.repo.GetTenantByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrStoreNotFound) {
-			respondJSON(w, http.StatusNotFound, map[string]string{"error": "Store not found"})
+		if errors.Is(err, repository.ErrTenantNotFound) {
+			respondJSON(w, http.StatusNotFound, map[string]string{"error": "Tenant not found"})
 			return
 		}
-		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to retrieve store: " + err.Error()})
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to retrieve tenant: " + err.Error()})
 		return
 	}
 
-	respondJSON(w, http.StatusOK, store.ToResponse(h.cfg.BaseDomain, h.cfg.ServerIP))
+	respondJSON(w, http.StatusOK, tenant.ToResponse(h.cfg.BaseDomain, h.cfg.ServerIP))
 }
 
-// ListStores handles GET /api/v1/stores
-func (h *StoreHandler) ListStores(w http.ResponseWriter, r *http.Request) {
+func (h *TenantHandler) GetStore(w http.ResponseWriter, r *http.Request) {
+	h.GetTenant(w, r)
+}
+
+// ListTenants handles GET /api/v1/tenants
+func (h *TenantHandler) ListTenants(w http.ResponseWriter, r *http.Request) {
 	limit := 20
 	offset := 0
 
@@ -123,15 +144,15 @@ func (h *StoreHandler) ListStores(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If authenticated user is an owner, list only their stores to prevent cross-tenant enumeration
+	// If authenticated user is an owner, list only their tenants to prevent cross-tenant enumeration
 	if claims, ok := middleware.UserFromContext(r.Context()); ok && claims != nil && claims.Role != "admin" {
-		stores, err := h.repo.ListStoresByOwner(r.Context(), claims.UserID)
+		tenants, err := h.repo.ListTenantsByOwner(r.Context(), claims.UserID)
 		if err != nil {
-			respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to list tenant stores"})
+			respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to list tenant workspaces"})
 			return
 		}
-		var responseList []model.StoreResponse
-		for _, s := range stores {
+		var responseList []model.TenantResponse
+		for _, s := range tenants {
 			responseList = append(responseList, s.ToResponse(h.cfg.BaseDomain, h.cfg.ServerIP))
 		}
 		respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -143,14 +164,14 @@ func (h *StoreHandler) ListStores(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stores, total, err := h.repo.ListStores(r.Context(), limit, offset)
+	tenants, total, err := h.repo.ListTenants(r.Context(), limit, offset)
 	if err != nil {
-		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to list stores: " + err.Error()})
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to list tenants: " + err.Error()})
 		return
 	}
 
-	var responseList []model.StoreResponse
-	for _, s := range stores {
+	var responseList []model.TenantResponse
+	for _, s := range tenants {
 		responseList = append(responseList, s.ToResponse(h.cfg.BaseDomain, h.cfg.ServerIP))
 	}
 
@@ -162,12 +183,16 @@ func (h *StoreHandler) ListStores(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ConnectCustomDomain handles POST /api/v1/stores/{id}/custom-domain
-func (h *StoreHandler) ConnectCustomDomain(w http.ResponseWriter, r *http.Request) {
+func (h *TenantHandler) ListStores(w http.ResponseWriter, r *http.Request) {
+	h.ListTenants(w, r)
+}
+
+// ConnectCustomDomain handles POST /api/v1/tenants/{id}/custom-domain
+func (h *TenantHandler) ConnectCustomDomain(w http.ResponseWriter, r *http.Request) {
 	idParam := chi.URLParam(r, "id")
 	id, err := uuid.Parse(idParam)
 	if err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid store UUID format"})
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid tenant UUID format"})
 		return
 	}
 
@@ -202,19 +227,19 @@ func (h *StoreHandler) ConnectCustomDomain(w http.ResponseWriter, r *http.Reques
 		verificationToken,
 		expiresAt,
 	); err != nil {
-		if errors.Is(err, repository.ErrUnauthorizedStore) {
-			respondJSON(w, http.StatusForbidden, map[string]string{"error": "You do not have permission to manage this store"})
+		if errors.Is(err, repository.ErrUnauthorizedTenant) {
+			respondJSON(w, http.StatusForbidden, map[string]string{"error": "You do not have permission to manage this tenant"})
 			return
 		}
 		if errors.Is(err, repository.ErrCustomDomainTaken) {
-			respondJSON(w, http.StatusConflict, map[string]string{"error": "Custom domain is already registered to another store"})
+			respondJSON(w, http.StatusConflict, map[string]string{"error": "Custom domain is already registered to another tenant"})
 			return
 		}
 		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to register custom domain: " + err.Error()})
 		return
 	}
 
-	updated, err := h.repo.GetStoreByID(r.Context(), id)
+	updated, err := h.repo.GetTenantByID(r.Context(), id)
 	if err != nil {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"message": "Custom domain registered. Please configure DNS verification records.",
@@ -224,41 +249,41 @@ func (h *StoreHandler) ConnectCustomDomain(w http.ResponseWriter, r *http.Reques
 
 	// Invalidate cache if redis is configured
 	if h.redisClient != nil {
-		h.redisClient.InvalidateStoreCache(r.Context(), h.cfg.BaseDomain, updated)
+		h.redisClient.InvalidateTenantCache(r.Context(), h.cfg.BaseDomain, updated)
 	}
 
 	respondJSON(w, http.StatusOK, updated.ToResponse(h.cfg.BaseDomain, h.cfg.ServerIP))
 }
 
-// VerifyCustomDomain handles POST /api/v1/stores/{id}/verify-domain
-func (h *StoreHandler) VerifyCustomDomain(w http.ResponseWriter, r *http.Request) {
+// VerifyCustomDomain handles POST /api/v1/tenants/{id}/verify-domain
+func (h *TenantHandler) VerifyCustomDomain(w http.ResponseWriter, r *http.Request) {
 	idParam := chi.URLParam(r, "id")
 	id, err := uuid.Parse(idParam)
 	if err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid store UUID format"})
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid tenant UUID format"})
 		return
 	}
 
-	store, err := h.repo.GetStoreByID(r.Context(), id)
+	tenant, err := h.repo.GetTenantByID(r.Context(), id)
 	if err != nil {
-		respondJSON(w, http.StatusNotFound, map[string]string{"error": "Store not found"})
+		respondJSON(w, http.StatusNotFound, map[string]string{"error": "Tenant not found"})
 		return
 	}
 
 	// IDOR check
 	if claims, ok := middleware.UserFromContext(r.Context()); ok && claims != nil && claims.Role != "admin" {
-		if store.OwnerID == nil || *store.OwnerID != claims.UserID {
-			respondJSON(w, http.StatusForbidden, map[string]string{"error": "You do not have permission to verify this store"})
+		if tenant.OwnerID == nil || *tenant.OwnerID != claims.UserID {
+			respondJSON(w, http.StatusForbidden, map[string]string{"error": "You do not have permission to verify this tenant"})
 			return
 		}
 	}
 
-	if store.CustomDomain == nil || *store.CustomDomain == "" {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "No custom domain is connected to this store"})
+	if tenant.CustomDomain == nil || *tenant.CustomDomain == "" {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "No custom domain is connected to this tenant"})
 		return
 	}
 
-	if store.VerificationToken == nil || *store.VerificationToken == "" {
+	if tenant.VerificationToken == nil || *tenant.VerificationToken == "" {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "No pending verification token exists for this domain"})
 		return
 	}
@@ -270,9 +295,9 @@ func (h *StoreHandler) VerifyCustomDomain(w http.ResponseWriter, r *http.Request
 		var verifyErr error
 		verified, reason, verifyErr = h.dnsVerifier.VerifyOwnership(
 			r.Context(),
-			*store.CustomDomain,
-			*store.VerificationToken,
-			store.FullSubdomain(h.cfg.BaseDomain),
+			*tenant.CustomDomain,
+			*tenant.VerificationToken,
+			tenant.FullSubdomain(h.cfg.BaseDomain),
 		)
 		err = verifyErr
 	} else {
@@ -296,25 +321,25 @@ func (h *StoreHandler) VerifyCustomDomain(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	store.DomainStatus = model.DomainStatusActive
+	tenant.DomainStatus = model.DomainStatusActive
 	if h.redisClient != nil {
-		h.redisClient.InvalidateStoreCache(r.Context(), h.cfg.BaseDomain, store)
+		h.redisClient.InvalidateTenantCache(r.Context(), h.cfg.BaseDomain, tenant)
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"verified":      true,
 		"status":        model.DomainStatusActive,
-		"custom_domain": *store.CustomDomain,
+		"custom_domain": *tenant.CustomDomain,
 		"message":       "Domain ownership verified successfully! SSL certificate is ready to be provisioned.",
 	})
 }
 
-// DisconnectCustomDomain handles DELETE /api/v1/stores/{id}/custom-domain
-func (h *StoreHandler) DisconnectCustomDomain(w http.ResponseWriter, r *http.Request) {
+// DisconnectCustomDomain handles DELETE /api/v1/tenants/{id}/custom-domain
+func (h *TenantHandler) DisconnectCustomDomain(w http.ResponseWriter, r *http.Request) {
 	idParam := chi.URLParam(r, "id")
 	id, err := uuid.Parse(idParam)
 	if err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid store UUID format"})
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid tenant UUID format"})
 		return
 	}
 
@@ -323,19 +348,19 @@ func (h *StoreHandler) DisconnectCustomDomain(w http.ResponseWriter, r *http.Req
 		ownerID = &claims.UserID
 	}
 
-	store, _ := h.repo.GetStoreByID(r.Context(), id)
+	tenant, _ := h.repo.GetTenantByID(r.Context(), id)
 
 	if err := h.repo.DeleteCustomDomain(r.Context(), id, ownerID); err != nil {
-		if errors.Is(err, repository.ErrUnauthorizedStore) {
-			respondJSON(w, http.StatusForbidden, map[string]string{"error": "You do not have permission to manage this store"})
+		if errors.Is(err, repository.ErrUnauthorizedTenant) {
+			respondJSON(w, http.StatusForbidden, map[string]string{"error": "You do not have permission to manage this tenant"})
 			return
 		}
 		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to disconnect custom domain: " + err.Error()})
 		return
 	}
 
-	if store != nil && h.redisClient != nil {
-		h.redisClient.InvalidateStoreCache(r.Context(), h.cfg.BaseDomain, store)
+	if tenant != nil && h.redisClient != nil {
+		h.redisClient.InvalidateTenantCache(r.Context(), h.cfg.BaseDomain, tenant)
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{

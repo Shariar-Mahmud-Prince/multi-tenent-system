@@ -50,6 +50,25 @@ func (d *dummyStoreRepo) ListStores(ctx context.Context, limit, offset int) ([]*
 func (d *dummyStoreRepo) ListStoresByOwner(ctx context.Context, ownerID uuid.UUID) ([]*model.Store, error) {
 	return nil, nil
 }
+func (d *dummyStoreRepo) CreateTenant(ctx context.Context, tenant *model.Tenant) error { return nil }
+func (d *dummyStoreRepo) GetTenantByID(ctx context.Context, id uuid.UUID) (*model.Tenant, error) {
+	return d.GetStoreByID(ctx, id)
+}
+func (d *dummyStoreRepo) GetTenantBySubdomain(ctx context.Context, subdomain string) (*model.Tenant, error) {
+	return d.GetStoreBySubdomain(ctx, subdomain)
+}
+func (d *dummyStoreRepo) GetTenantByCustomDomain(ctx context.Context, customDomain string) (*model.Tenant, error) {
+	return d.GetStoreByCustomDomain(ctx, customDomain)
+}
+func (d *dummyStoreRepo) ResolveTenantByHost(ctx context.Context, host string, baseDomain string) (*model.Tenant, error) {
+	return d.ResolveStoreByHost(ctx, host, baseDomain)
+}
+func (d *dummyStoreRepo) ListTenants(ctx context.Context, limit, offset int) ([]*model.Tenant, int, error) {
+	return nil, 0, nil
+}
+func (d *dummyStoreRepo) ListTenantsByOwner(ctx context.Context, ownerID uuid.UUID) ([]*model.Tenant, error) {
+	return nil, nil
+}
 
 func TestMemory_NoLeakUnderSustainedRequests(t *testing.T) {
 	repo := &dummyStoreRepo{}

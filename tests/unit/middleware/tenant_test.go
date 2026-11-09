@@ -60,6 +60,27 @@ func (m *mockStoreRepo) ListStores(ctx context.Context, limit, offset int) ([]*m
 func (m *mockStoreRepo) ListStoresByOwner(ctx context.Context, ownerID uuid.UUID) ([]*model.Store, error) {
 	return []*model.Store{m.store}, nil
 }
+func (m *mockStoreRepo) CreateTenant(ctx context.Context, tenant *model.Tenant) error {
+	return m.CreateStore(ctx, tenant)
+}
+func (m *mockStoreRepo) GetTenantByID(ctx context.Context, id uuid.UUID) (*model.Tenant, error) {
+	return m.GetStoreByID(ctx, id)
+}
+func (m *mockStoreRepo) GetTenantBySubdomain(ctx context.Context, subdomain string) (*model.Tenant, error) {
+	return m.GetStoreBySubdomain(ctx, subdomain)
+}
+func (m *mockStoreRepo) GetTenantByCustomDomain(ctx context.Context, customDomain string) (*model.Tenant, error) {
+	return m.GetStoreByCustomDomain(ctx, customDomain)
+}
+func (m *mockStoreRepo) ResolveTenantByHost(ctx context.Context, host string, baseDomain string) (*model.Tenant, error) {
+	return m.ResolveStoreByHost(ctx, host, baseDomain)
+}
+func (m *mockStoreRepo) ListTenants(ctx context.Context, limit, offset int) ([]*model.Tenant, int, error) {
+	return m.ListStores(ctx, limit, offset)
+}
+func (m *mockStoreRepo) ListTenantsByOwner(ctx context.Context, ownerID uuid.UUID) ([]*model.Tenant, error) {
+	return m.ListStoresByOwner(ctx, ownerID)
+}
 
 func TestTenantMiddleware_ValidTenant(t *testing.T) {
 	cd := "shop.acme.test"

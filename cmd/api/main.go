@@ -62,13 +62,13 @@ func main() {
 
 	// 5. Instantiate services, repositories, and handlers
 	userRepo := repository.NewPostgresUserRepository(db)
-	storeRepo := repository.NewPostgresStoreRepository(db)
+	tenantRepo := repository.NewPostgresTenantRepository(db)
 	dnsVerifier := service.NewDNSVerifier()
 
 	authHandler := handler.NewAuthHandler(userRepo, cfg)
-	domainHandler := handler.NewDomainHandler(storeRepo, cfg)
-	storeHandler := handler.NewStoreHandler(storeRepo, cfg, redisClient, dnsVerifier)
-	storefrontHandler := handler.NewStorefrontHandler(cfg)
+	domainHandler := handler.NewDomainHandler(tenantRepo, cfg)
+	tenantHandler := handler.NewTenantHandler(tenantRepo, cfg, redisClient, dnsVerifier)
+	tenantAppHandler := handler.NewTenantAppHandler(cfg)
 
 	// 6. Build Chi router
 	r := chi.NewRouter()
@@ -119,24 +119,28 @@ func main() {
 		// Caddy On-Demand TLS Verification Hook (Public)
 		api.Get("/domains/validate", domainHandler.ValidateDomain)
 
-		// Tenant Store Routes
-		api.Route("/stores", func(stores chi.Router) {
-			// Public store lookup by ID
-			stores.Get("/{id}", storeHandler.GetStore)
+		// Primary Multi-Tenant Workspace Routes
+		registerTenantRoutes := func(router chi.Router) {
+			// Public tenant lookup by ID
+			router.Get("/{id}", tenantHandler.GetTenant)
 
-			// Authenticated Store & Domain Management Routes
-			stores.Group(func(protected chi.Router) {
+			// Authenticated Tenant & Domain Management Routes
+			router.Group(func(protected chi.Router) {
 				protected.Use(middleware.AuthMiddleware(cfg.JWTSecret))
-				protected.Get("/", storeHandler.ListStores)
-				protected.Post("/", storeHandler.CreateStore)
-				protected.Post("/{id}/custom-domain", storeHandler.ConnectCustomDomain)
-				protected.Post("/{id}/verify-domain", storeHandler.VerifyCustomDomain)
-				protected.Delete("/{id}/custom-domain", storeHandler.DisconnectCustomDomain)
+				protected.Get("/", tenantHandler.ListTenants)
+				protected.Post("/", tenantHandler.CreateTenant)
+				protected.Post("/{id}/custom-domain", tenantHandler.ConnectCustomDomain)
+				protected.Post("/{id}/verify-domain", tenantHandler.VerifyCustomDomain)
+				protected.Delete("/{id}/custom-domain", tenantHandler.DisconnectCustomDomain)
 			})
-		})
+		}
+
+		api.Route("/tenants", registerTenantRoutes)
+		// Backward compatibility alias: /stores routes to /tenants
+		api.Route("/stores", registerTenantRoutes)
 	})
 
-	// Catch-all route: Dispatches between System Root Index and Tenant Storefronts
+	// Catch-all route: Dispatches between System Root Index and Tenant Applications
 	systemHostsMap := make(map[string]bool)
 	for _, h := range cfg.AllowedSystemHosts {
 		systemHostsMap[strings.ToLower(strings.TrimSpace(h))] = true
@@ -151,7 +155,7 @@ func main() {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
-					"service":     "multi-tenant-saas-platform",
+					"service":     "multi-tenant-saas-foundation",
 					"version":     version,
 					"base_domain": cfg.BaseDomain,
 					"status":      "running",
@@ -162,10 +166,10 @@ func main() {
 						"login":                 "POST /api/v1/auth/login",
 						"profile":               "GET /api/v1/auth/me",
 						"caddy_tls_validate":    "GET /api/v1/domains/validate?domain={domain}",
-						"list_stores":           "GET /api/v1/stores",
-						"create_store":          "POST /api/v1/stores",
-						"connect_custom_domain": "POST /api/v1/stores/{id}/custom-domain",
-						"verify_domain":         "POST /api/v1/stores/{id}/verify-domain",
+						"list_tenants":          "GET /api/v1/tenants",
+						"create_tenant":         "POST /api/v1/tenants",
+						"connect_custom_domain": "POST /api/v1/tenants/{id}/custom-domain",
+						"verify_domain":         "POST /api/v1/tenants/{id}/verify-domain",
 					},
 				})
 				return
@@ -180,41 +184,41 @@ func main() {
 			return
 		}
 
-		// 2. Resolve tenant store (First check Redis cache, fallback to PostgreSQL)
-		var store *model.Store
-		if cached, found := redisClient.GetCachedStore(r.Context(), cleanedHost); found {
-			store = cached
+		// 2. Resolve tenant workspace (First check Redis cache, fallback to PostgreSQL)
+		var tenant *model.Tenant
+		if cached, found := redisClient.GetCachedTenant(r.Context(), cleanedHost); found {
+			tenant = cached
 		} else {
-			dbStore, err := storeRepo.ResolveStoreByHost(r.Context(), cleanedHost, cfg.BaseDomain)
+			dbTenant, err := tenantRepo.ResolveTenantByHost(r.Context(), cleanedHost, cfg.BaseDomain)
 			if err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusNotFound)
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
-					"error":   "Tenant store not found",
+					"error":   "Tenant workspace not found",
 					"host":    cleanedHost,
-					"message": fmt.Sprintf("No active store registered for domain '%s'", cleanedHost),
+					"message": fmt.Sprintf("No active tenant workspace registered for domain '%s'", cleanedHost),
 				})
 				return
 			}
-			store = dbStore
-			// Cache resolved store for 10 minutes
-			redisClient.SetCachedStore(r.Context(), cleanedHost, store, 10*time.Minute)
+			tenant = dbTenant
+			// Cache resolved tenant for 10 minutes
+			redisClient.SetCachedTenant(r.Context(), cleanedHost, tenant, 10*time.Minute)
 		}
 
-		if !store.IsActive {
+		if !tenant.IsActive {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"error":    "Store inactive",
-				"store_id": store.ID,
-				"message":  "This store has been temporarily disabled.",
+				"error":     "Tenant workspace inactive",
+				"tenant_id": tenant.ID,
+				"message":   "This tenant workspace has been temporarily suspended or disabled.",
 			})
 			return
 		}
 
-		// Inject tenant store into request context and serve storefront
-		ctx := middleware.WithTenant(r.Context(), store)
-		storefrontHandler.ServeStorefront(w, r.WithContext(ctx))
+		// Inject tenant workspace into request context and serve tenant app
+		ctx := middleware.WithTenant(r.Context(), tenant)
+		tenantAppHandler.ServeTenantApp(w, r.WithContext(ctx))
 	})
 
 	// 7. Start HTTP Server with Graceful Shutdown

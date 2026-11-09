@@ -126,6 +126,28 @@ func (m *mockStoreRepository) ListStoresByOwner(ctx context.Context, ownerID uui
 	return results, nil
 }
 
+func (m *mockStoreRepository) CreateTenant(ctx context.Context, tenant *model.Tenant) error {
+	return m.CreateStore(ctx, tenant)
+}
+func (m *mockStoreRepository) GetTenantByID(ctx context.Context, id uuid.UUID) (*model.Tenant, error) {
+	return m.GetStoreByID(ctx, id)
+}
+func (m *mockStoreRepository) GetTenantBySubdomain(ctx context.Context, subdomain string) (*model.Tenant, error) {
+	return m.GetStoreBySubdomain(ctx, subdomain)
+}
+func (m *mockStoreRepository) GetTenantByCustomDomain(ctx context.Context, customDomain string) (*model.Tenant, error) {
+	return m.GetStoreByCustomDomain(ctx, customDomain)
+}
+func (m *mockStoreRepository) ResolveTenantByHost(ctx context.Context, host string, baseDomain string) (*model.Tenant, error) {
+	return m.ResolveStoreByHost(ctx, host, baseDomain)
+}
+func (m *mockStoreRepository) ListTenants(ctx context.Context, limit, offset int) ([]*model.Tenant, int, error) {
+	return m.ListStores(ctx, limit, offset)
+}
+func (m *mockStoreRepository) ListTenantsByOwner(ctx context.Context, ownerID uuid.UUID) ([]*model.Tenant, error) {
+	return m.ListStoresByOwner(ctx, ownerID)
+}
+
 func setupTestDomainHandler() (*handler.DomainHandler, *mockStoreRepository, *config.Config) {
 	cfg := &config.Config{
 		BaseDomain:         "yourplatform.test",

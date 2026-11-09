@@ -1,4 +1,4 @@
-package store_test
+package tenant_test
 
 import (
 	"bytes"
@@ -23,7 +23,7 @@ func getBaseURL() string {
 	return url
 }
 
-func TestE2E_FullCustomerStoreLifecycle(t *testing.T) {
+func TestE2E_FullCustomerTenantLifecycle(t *testing.T) {
 	baseURL := getBaseURL()
 	client := &http.Client{Timeout: 5 * time.Second}
 
@@ -35,10 +35,10 @@ func TestE2E_FullCustomerStoreLifecycle(t *testing.T) {
 	health.Body.Close()
 
 	suffix := uuid.New().String()[:8]
-	email := fmt.Sprintf("merchant-%s@e2e.test", suffix)
+	email := fmt.Sprintf("tenant-owner-%s@e2e.test", suffix)
 	password := "ProdReadyPass123!"
 
-	// Step 1: Register merchant account
+	// Step 1: Register merchant/workspace owner account
 	regBody, _ := json.Marshal(model.RegisterUserRequest{
 		Email:    email,
 		Password: password,
@@ -57,36 +57,36 @@ func TestE2E_FullCustomerStoreLifecycle(t *testing.T) {
 		t.Fatalf("Step 1 failed: empty JWT received")
 	}
 
-	// Step 2: Create a store with unique subdomain
-	subdomain := fmt.Sprintf("e2estore-%s", suffix)
-	storeBody, _ := json.Marshal(model.CreateStoreRequest{
-		Name:      "E2E Test Boutique",
+	// Step 2: Create a tenant workspace with unique subdomain
+	subdomain := fmt.Sprintf("workspace-%s", suffix)
+	tenantBody, _ := json.Marshal(model.CreateTenantRequest{
+		Name:      "E2E SaaS Workspace",
 		Subdomain: subdomain,
 	})
-	reqStore, _ := http.NewRequest(http.MethodPost, baseURL+"/api/v1/stores", bytes.NewReader(storeBody))
-	reqStore.Header.Set("Content-Type", "application/json")
-	reqStore.Header.Set("Authorization", "Bearer "+token)
+	reqTenant, _ := http.NewRequest(http.MethodPost, baseURL+"/api/v1/tenants", bytes.NewReader(tenantBody))
+	reqTenant.Header.Set("Content-Type", "application/json")
+	reqTenant.Header.Set("Authorization", "Bearer "+token)
 
-	storeResp, err := client.Do(reqStore)
-	if err != nil || storeResp.StatusCode != http.StatusCreated {
-		t.Fatalf("Step 2 failed: store creation returned status %d", storeResp.StatusCode)
+	tenantResp, err := client.Do(reqTenant)
+	if err != nil || tenantResp.StatusCode != http.StatusCreated {
+		t.Fatalf("Step 2 failed: tenant creation returned status %d", tenantResp.StatusCode)
 	}
-	var createdStore model.StoreResponse
-	_ = json.NewDecoder(storeResp.Body).Decode(&createdStore)
-	storeResp.Body.Close()
+	var createdTenant model.TenantResponse
+	_ = json.NewDecoder(tenantResp.Body).Decode(&createdTenant)
+	tenantResp.Body.Close()
 
-	if createdStore.Subdomain != subdomain {
-		t.Fatalf("Step 2 failed: expected subdomain %s, got %s", subdomain, createdStore.Subdomain)
+	if createdTenant.Subdomain != subdomain {
+		t.Fatalf("Step 2 failed: expected subdomain %s, got %s", subdomain, createdTenant.Subdomain)
 	}
 
-	// Step 3: Connect a custom domain
-	customDomain := fmt.Sprintf("shop-%s.local", suffix)
+	// Step 3: Connect a custom domain to the tenant
+	customDomain := fmt.Sprintf("app-%s.local", suffix)
 	connectBody, _ := json.Marshal(model.ConnectCustomDomainRequest{
 		CustomDomain: customDomain,
 	})
 	reqConnect, _ := http.NewRequest(
 		http.MethodPost,
-		fmt.Sprintf("%s/api/v1/stores/%s/custom-domain", baseURL, createdStore.ID.String()),
+		fmt.Sprintf("%s/api/v1/tenants/%s/custom-domain", baseURL, createdTenant.ID.String()),
 		bytes.NewReader(connectBody),
 	)
 	reqConnect.Header.Set("Content-Type", "application/json")
@@ -96,7 +96,7 @@ func TestE2E_FullCustomerStoreLifecycle(t *testing.T) {
 	if err != nil || connectResp.StatusCode != http.StatusOK {
 		t.Fatalf("Step 3 failed: connect custom domain returned status %d", connectResp.StatusCode)
 	}
-	var connectResult model.StoreResponse
+	var connectResult model.TenantResponse
 	_ = json.NewDecoder(connectResp.Body).Decode(&connectResult)
 	connectResp.Body.Close()
 
@@ -110,7 +110,7 @@ func TestE2E_FullCustomerStoreLifecycle(t *testing.T) {
 	// Step 4: Verify custom domain ownership
 	reqVerify, _ := http.NewRequest(
 		http.MethodPost,
-		fmt.Sprintf("%s/api/v1/stores/%s/verify-domain", baseURL, createdStore.ID.String()),
+		fmt.Sprintf("%s/api/v1/tenants/%s/verify-domain", baseURL, createdTenant.ID.String()),
 		nil,
 	)
 	reqVerify.Header.Set("Authorization", "Bearer "+token)
@@ -127,31 +127,31 @@ func TestE2E_FullCustomerStoreLifecycle(t *testing.T) {
 		t.Fatalf("Step 4 failed: domain verification reported false: %+v", verifyResult)
 	}
 
-	// Step 5: Resolve storefront using the verified custom domain Host header
-	reqStorefront, _ := http.NewRequest(http.MethodGet, baseURL+"/", nil)
-	reqStorefront.Host = customDomain
-	reqStorefront.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SaaS-Tester")
+	// Step 5: Resolve tenant application workspace using custom domain Host header
+	reqApp, _ := http.NewRequest(http.MethodGet, baseURL+"/", nil)
+	reqApp.Host = customDomain
+	reqApp.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SaaS-Tester")
 
-	sfResp, err := client.Do(reqStorefront)
+	appResp, err := client.Do(reqApp)
 	if err != nil {
-		t.Fatalf("Step 5 failed: storefront request error: %v", err)
+		t.Fatalf("Step 5 failed: tenant app request error: %v", err)
 	}
-	bodyContent, _ := io.ReadAll(sfResp.Body)
-	sfResp.Body.Close()
+	bodyContent, _ := io.ReadAll(appResp.Body)
+	appResp.Body.Close()
 
-	if sfResp.StatusCode != http.StatusOK {
-		t.Fatalf("Step 5 failed: storefront returned status %d, body: %s", sfResp.StatusCode, string(bodyContent))
+	if appResp.StatusCode != http.StatusOK {
+		t.Fatalf("Step 5 failed: tenant app returned status %d, body: %s", appResp.StatusCode, string(bodyContent))
 	}
 
-	// Should contain store details
-	if !strings.Contains(string(bodyContent), "E2E Test Boutique") && !strings.Contains(string(bodyContent), createdStore.ID.String()) {
-		t.Errorf("Step 5 warning: storefront response does not mention store name or ID: %s", string(bodyContent))
+	// Should contain tenant details
+	if !strings.Contains(string(bodyContent), "E2E SaaS Workspace") && !strings.Contains(string(bodyContent), createdTenant.ID.String()) {
+		t.Errorf("Step 5 warning: response does not mention tenant name or ID: %s", string(bodyContent))
 	}
 
 	// Step 6: Disconnect custom domain
 	reqDisconnect, _ := http.NewRequest(
 		http.MethodDelete,
-		fmt.Sprintf("%s/api/v1/stores/%s/custom-domain", baseURL, createdStore.ID.String()),
+		fmt.Sprintf("%s/api/v1/tenants/%s/custom-domain", baseURL, createdTenant.ID.String()),
 		nil,
 	)
 	reqDisconnect.Header.Set("Authorization", "Bearer "+token)

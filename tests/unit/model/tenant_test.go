@@ -28,58 +28,58 @@ func TestCleanDomain(t *testing.T) {
 	}
 }
 
-func TestCreateStoreRequest_Validate(t *testing.T) {
+func TestCreateTenantRequest_Validate(t *testing.T) {
 	baseDomain := "yourplatform.test"
 
 	tests := []struct {
 		name      string
-		req       model.CreateStoreRequest
+		req       model.CreateTenantRequest
 		expectErr bool
 	}{
 		{
 			name: "Valid request",
-			req: model.CreateStoreRequest{
-				Name:      "Valid Store",
-				Subdomain: "valid-store",
+			req: model.CreateTenantRequest{
+				Name:      "Valid Workspace",
+				Subdomain: "valid-workspace",
 			},
 			expectErr: false,
 		},
 		{
 			name: "Empty name",
-			req: model.CreateStoreRequest{
+			req: model.CreateTenantRequest{
 				Name:      "",
-				Subdomain: "mystore",
+				Subdomain: "myworkspace",
 			},
 			expectErr: true,
 		},
 		{
 			name: "Reserved subdomain",
-			req: model.CreateStoreRequest{
-				Name:      "Admin Store",
+			req: model.CreateTenantRequest{
+				Name:      "Admin App",
 				Subdomain: "admin",
 			},
 			expectErr: true,
 		},
 		{
 			name: "Too short subdomain",
-			req: model.CreateStoreRequest{
-				Name:      "Short Store",
+			req: model.CreateTenantRequest{
+				Name:      "Short App",
 				Subdomain: "ab",
 			},
 			expectErr: true,
 		},
 		{
 			name: "Invalid characters in subdomain",
-			req: model.CreateStoreRequest{
-				Name:      "Invalid Store",
-				Subdomain: "my_store!",
+			req: model.CreateTenantRequest{
+				Name:      "Invalid App",
+				Subdomain: "my_app!",
 			},
 			expectErr: true,
 		},
 		{
 			name: "Subdomain starting with hyphen",
-			req: model.CreateStoreRequest{
-				Name:      "Hyphen Store",
+			req: model.CreateTenantRequest{
+				Name:      "Hyphen App",
 				Subdomain: "-invalid",
 			},
 			expectErr: true,

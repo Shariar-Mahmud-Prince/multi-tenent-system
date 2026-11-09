@@ -53,6 +53,25 @@ func (b *benchStoreRepo) ListStores(ctx context.Context, limit, offset int) ([]*
 func (b *benchStoreRepo) ListStoresByOwner(ctx context.Context, ownerID uuid.UUID) ([]*model.Store, error) {
 	return nil, nil
 }
+func (b *benchStoreRepo) CreateTenant(ctx context.Context, tenant *model.Tenant) error { return nil }
+func (b *benchStoreRepo) GetTenantByID(ctx context.Context, id uuid.UUID) (*model.Tenant, error) {
+	return b.GetStoreByID(ctx, id)
+}
+func (b *benchStoreRepo) GetTenantBySubdomain(ctx context.Context, subdomain string) (*model.Tenant, error) {
+	return b.GetStoreBySubdomain(ctx, subdomain)
+}
+func (b *benchStoreRepo) GetTenantByCustomDomain(ctx context.Context, customDomain string) (*model.Tenant, error) {
+	return b.GetStoreByCustomDomain(ctx, customDomain)
+}
+func (b *benchStoreRepo) ResolveTenantByHost(ctx context.Context, host string, baseDomain string) (*model.Tenant, error) {
+	return b.ResolveStoreByHost(ctx, host, baseDomain)
+}
+func (b *benchStoreRepo) ListTenants(ctx context.Context, limit, offset int) ([]*model.Tenant, int, error) {
+	return nil, 0, nil
+}
+func (b *benchStoreRepo) ListTenantsByOwner(ctx context.Context, ownerID uuid.UUID) ([]*model.Tenant, error) {
+	return nil, nil
+}
 
 // BenchmarkDomainValidation benchmarks Caddy on-demand ask endpoint CPU performance
 func BenchmarkDomainValidation(b *testing.B) {

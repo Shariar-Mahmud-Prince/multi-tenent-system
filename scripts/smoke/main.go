@@ -75,7 +75,7 @@ func main() {
 		resp.Body.Close()
 	}
 
-	// 6. User Authentication & Store Creation REST API
+	// 6. User Authentication & Tenant Creation REST API
 	authPayload := map[string]string{
 		"email":    fmt.Sprintf("smoke-%d@saas.local", time.Now().Unix()),
 		"password": "SmokePassword123!",
@@ -93,18 +93,18 @@ func main() {
 		authResp.Body.Close()
 	}
 
-	storePayload := map[string]interface{}{
-		"name":      fmt.Sprintf("Smoke Store %d", time.Now().Unix()),
+	tenantPayload := map[string]interface{}{
+		"name":      fmt.Sprintf("Smoke Workspace %d", time.Now().Unix()),
 		"subdomain": fmt.Sprintf("smoke-%d", time.Now().Unix()%10000),
 	}
-	payloadBytes, _ := json.Marshal(storePayload)
-	reqStore, _ := http.NewRequest(http.MethodPost, "http://localhost:8080/api/v1/stores", bytes.NewReader(payloadBytes))
-	reqStore.Header.Set("Content-Type", "application/json")
+	payloadBytes, _ := json.Marshal(tenantPayload)
+	reqTenant, _ := http.NewRequest(http.MethodPost, "http://localhost:8080/api/v1/tenants", bytes.NewReader(payloadBytes))
+	reqTenant.Header.Set("Content-Type", "application/json")
 	if token != "" {
-		reqStore.Header.Set("Authorization", "Bearer "+token)
+		reqTenant.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err = client.Do(reqStore)
-	check("Store Management API (Create Store with JWT)", err == nil && resp != nil && resp.StatusCode == http.StatusCreated, fmt.Sprintf("Created store subdomain '%s'", storePayload["subdomain"]))
+	resp, err = client.Do(reqTenant)
+	check("Tenant Workspace API (Create Tenant with JWT)", err == nil && resp != nil && resp.StatusCode == http.StatusCreated, fmt.Sprintf("Created tenant subdomain '%s'", tenantPayload["subdomain"]))
 	if resp != nil {
 		resp.Body.Close()
 	}

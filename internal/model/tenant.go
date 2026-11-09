@@ -45,8 +45,8 @@ var (
 	}
 )
 
-// Store represents a tenant store in the database.
-type Store struct {
+// Tenant represents an isolated multi-tenant application/workspace instance in the SaaS platform.
+type Tenant struct {
 	ID                    uuid.UUID  `json:"id"`
 	OwnerID               *uuid.UUID `json:"owner_id,omitempty"`
 	Name                  string     `json:"name"`
@@ -60,12 +60,15 @@ type Store struct {
 	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
+// Backward compatibility alias
+type Store = Tenant
+
 // FullSubdomain returns the complete subdomain URL host e.g. "acme.yourplatform.local".
-func (s *Store) FullSubdomain(baseDomain string) string {
-	return fmt.Sprintf("%s.%s", strings.ToLower(s.Subdomain), strings.ToLower(baseDomain))
+func (t *Tenant) FullSubdomain(baseDomain string) string {
+	return fmt.Sprintf("%s.%s", strings.ToLower(t.Subdomain), strings.ToLower(baseDomain))
 }
 
-// DNSInstructions outlines how the store owner configures DNS at their registrar.
+// DNSInstructions outlines how the tenant owner configures DNS at their registrar.
 type DNSInstructions struct {
 	CustomDomain string `json:"custom_domain"`
 	TXTRecord    struct {
@@ -83,21 +86,21 @@ type DNSInstructions struct {
 }
 
 // GenerateDNSInstructions builds DNS setup instructions for a custom domain.
-func (s *Store) GenerateDNSInstructions(baseDomain, serverIP string) DNSInstructions {
+func (t *Tenant) GenerateDNSInstructions(baseDomain, serverIP string) DNSInstructions {
 	var instr DNSInstructions
-	if s.CustomDomain == nil || s.VerificationToken == nil {
+	if t.CustomDomain == nil || t.VerificationToken == nil {
 		return instr
 	}
 
-	cd := *s.CustomDomain
-	token := *s.VerificationToken
+	cd := *t.CustomDomain
+	token := *t.VerificationToken
 
 	instr.CustomDomain = cd
 	instr.TXTRecord.Host = "_saas-verify." + cd
 	instr.TXTRecord.Value = "token=" + token
 
 	instr.CNAMERecord.Host = cd
-	instr.CNAMERecord.Target = s.FullSubdomain(baseDomain)
+	instr.CNAMERecord.Target = t.FullSubdomain(baseDomain)
 
 	instr.ARecord.Host = cd
 	instr.ARecord.IPv4 = serverIP
@@ -105,21 +108,24 @@ func (s *Store) GenerateDNSInstructions(baseDomain, serverIP string) DNSInstruct
 	return instr
 }
 
-// CreateStoreRequest contains the payload for creating a new store.
-type CreateStoreRequest struct {
+// CreateTenantRequest contains the payload for provisioning a new tenant workspace.
+type CreateTenantRequest struct {
 	Name         string  `json:"name"`
 	Subdomain    string  `json:"subdomain"`
 	CustomDomain *string `json:"custom_domain,omitempty"`
 }
 
-// Validate validates the store creation request.
-func (r *CreateStoreRequest) Validate(baseDomain string) error {
+// Backward compatibility alias
+type CreateStoreRequest = CreateTenantRequest
+
+// Validate validates the tenant creation request.
+func (r *CreateTenantRequest) Validate(baseDomain string) error {
 	r.Name = strings.TrimSpace(r.Name)
 	if r.Name == "" {
-		return errors.New("store name is required")
+		return errors.New("tenant name is required")
 	}
 	if len(r.Name) > 255 {
-		return errors.New("store name must not exceed 255 characters")
+		return errors.New("tenant name must not exceed 255 characters")
 	}
 
 	r.Subdomain = strings.ToLower(strings.TrimSpace(r.Subdomain))
@@ -202,7 +208,7 @@ func ValidateCustomDomain(domain string, baseDomain string) error {
 		return errors.New("domain must not exceed 255 characters")
 	}
 	if !domainRegex.MatchString(domain) {
-		return errors.New("domain must be a valid FQDN (e.g. shop.example.com or mystore.com)")
+		return errors.New("domain must be a valid FQDN (e.g. app.customer.com or workspace.domain.org)")
 	}
 
 	baseDomain = strings.ToLower(strings.TrimSpace(baseDomain))
@@ -213,8 +219,8 @@ func ValidateCustomDomain(domain string, baseDomain string) error {
 	return nil
 }
 
-// StoreResponse is the serialized representation returned to clients.
-type StoreResponse struct {
+// TenantResponse is the serialized representation returned to clients.
+type TenantResponse struct {
 	ID                    uuid.UUID        `json:"id"`
 	OwnerID               *uuid.UUID       `json:"owner_id,omitempty"`
 	Name                  string           `json:"name"`
@@ -230,36 +236,40 @@ type StoreResponse struct {
 	UpdatedAt             time.Time        `json:"updated_at"`
 }
 
-// ToResponse converts a Store model to a StoreResponse DTO.
-func (s *Store) ToResponse(baseDomain string, serverIP string) StoreResponse {
+// Backward compatibility alias
+type StoreResponse = TenantResponse
+
+// ToResponse converts a Tenant model to a TenantResponse DTO.
+func (t *Tenant) ToResponse(baseDomain string, serverIP string) TenantResponse {
 	var dnsInstr *DNSInstructions
-	if s.CustomDomain != nil && s.DomainStatus == DomainStatusPending {
-		d := s.GenerateDNSInstructions(baseDomain, serverIP)
+	if t.CustomDomain != nil && t.DomainStatus == DomainStatusPending {
+		d := t.GenerateDNSInstructions(baseDomain, serverIP)
 		dnsInstr = &d
 	}
 
-	return StoreResponse{
-		ID:                    s.ID,
-		OwnerID:               s.OwnerID,
-		Name:                  s.Name,
-		Subdomain:             s.Subdomain,
-		SubdomainURL:          fmt.Sprintf("https://%s.%s", s.Subdomain, baseDomain),
-		CustomDomain:          s.CustomDomain,
-		DomainStatus:          s.DomainStatus,
-		VerificationToken:     s.VerificationToken,
-		VerificationExpiresAt: s.VerificationExpiresAt,
+	return TenantResponse{
+		ID:                    t.ID,
+		OwnerID:               t.OwnerID,
+		Name:                  t.Name,
+		Subdomain:             t.Subdomain,
+		SubdomainURL:          fmt.Sprintf("https://%s.%s", t.Subdomain, baseDomain),
+		CustomDomain:          t.CustomDomain,
+		DomainStatus:          t.DomainStatus,
+		VerificationToken:     t.VerificationToken,
+		VerificationExpiresAt: t.VerificationExpiresAt,
 		DNSInstructions:       dnsInstr,
-		IsActive:              s.IsActive,
-		CreatedAt:             s.CreatedAt,
-		UpdatedAt:             s.UpdatedAt,
+		IsActive:              t.IsActive,
+		CreatedAt:             t.CreatedAt,
+		UpdatedAt:             t.UpdatedAt,
 	}
 }
 
 // DomainValidationResult represents the response for Caddy's ask endpoint.
 type DomainValidationResult struct {
-	Status  string     `json:"status"`
-	Domain  string     `json:"domain"`
-	Allowed bool       `json:"allowed"`
-	StoreID *uuid.UUID `json:"store_id,omitempty"`
-	Reason  string     `json:"reason,omitempty"`
+	Status   string     `json:"status"`
+	Domain   string     `json:"domain"`
+	Allowed  bool       `json:"allowed"`
+	TenantID *uuid.UUID `json:"tenant_id,omitempty"`
+	StoreID  *uuid.UUID `json:"store_id,omitempty"` // Backward compatibility
+	Reason   string     `json:"reason,omitempty"`
 }

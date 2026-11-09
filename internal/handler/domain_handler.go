@@ -14,13 +14,13 @@ import (
 
 // DomainHandler handles domain validation requests for Caddy's On-Demand TLS and tenant domain verification.
 type DomainHandler struct {
-	repo       repository.StoreRepository
+	repo       repository.TenantRepository
 	cfg        *config.Config
 	systemHost map[string]bool
 }
 
 // NewDomainHandler creates a new DomainHandler instance.
-func NewDomainHandler(repo repository.StoreRepository, cfg *config.Config) *DomainHandler {
+func NewDomainHandler(repo repository.TenantRepository, cfg *config.Config) *DomainHandler {
 	systemMap := make(map[string]bool)
 	for _, h := range cfg.AllowedSystemHosts {
 		systemMap[strings.ToLower(strings.TrimSpace(h))] = true
@@ -69,34 +69,35 @@ func (h *DomainHandler) ValidateDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve tenant store for this domain or subdomain
-	store, err := h.repo.ResolveStoreByHost(r.Context(), domain, h.cfg.BaseDomain)
+	// Resolve tenant workspace for this domain or subdomain
+	tenant, err := h.repo.ResolveTenantByHost(r.Context(), domain, h.cfg.BaseDomain)
 	if err != nil {
-		log.Printf("[tls-validate] Denied: domain '%s' does not match any registered tenant store", domain)
-		metrics.DomainValidationsTotal.WithLabelValues("denied", "unknown_store").Inc()
+		log.Printf("[tls-validate] Denied: domain '%s' does not match any registered tenant workspace", domain)
+		metrics.DomainValidationsTotal.WithLabelValues("denied", "unknown_tenant").Inc()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(model.DomainValidationResult{
 			Status:  "denied",
 			Domain:  domain,
 			Allowed: false,
-			Reason:  "Domain is not associated with any registered tenant store.",
+			Reason:  "Domain is not associated with any registered tenant workspace.",
 		})
 		return
 	}
 
-	// Verify store is active
-	if !store.IsActive {
-		log.Printf("[tls-validate] Denied: store '%s' for domain '%s' is inactive", store.ID, domain)
-		metrics.DomainValidationsTotal.WithLabelValues("denied", "store_inactive").Inc()
+	// Verify tenant is active
+	if !tenant.IsActive {
+		log.Printf("[tls-validate] Denied: tenant '%s' for domain '%s' is inactive", tenant.ID, domain)
+		metrics.DomainValidationsTotal.WithLabelValues("denied", "tenant_inactive").Inc()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(model.DomainValidationResult{
-			Status:  "denied",
-			Domain:  domain,
-			Allowed: false,
-			StoreID: &store.ID,
-			Reason:  "The tenant store associated with this domain is currently inactive.",
+			Status:   "denied",
+			Domain:   domain,
+			Allowed:  false,
+			TenantID: &tenant.ID,
+			StoreID:  &tenant.ID,
+			Reason:   "The tenant workspace associated with this domain is currently inactive.",
 		})
 		return
 	}
@@ -104,33 +105,35 @@ func (h *DomainHandler) ValidateDomain(w http.ResponseWriter, r *http.Request) {
 	// If this is a custom domain, ensure it is verified before approving TLS certificate issuance
 	isPlatformSubdomain := strings.HasSuffix(domain, "."+strings.ToLower(h.cfg.BaseDomain))
 	if !isPlatformSubdomain {
-		if store.DomainStatus != model.DomainStatusVerified &&
-			store.DomainStatus != model.DomainStatusActive &&
-			store.DomainStatus != model.DomainStatusProvisioning {
-			log.Printf("[tls-validate] Denied: custom domain '%s' has unverified status '%s'", domain, store.DomainStatus)
+		if tenant.DomainStatus != model.DomainStatusVerified &&
+			tenant.DomainStatus != model.DomainStatusActive &&
+			tenant.DomainStatus != model.DomainStatusProvisioning {
+			log.Printf("[tls-validate] Denied: custom domain '%s' has unverified status '%s'", domain, tenant.DomainStatus)
 			metrics.DomainValidationsTotal.WithLabelValues("denied", "domain_unverified").Inc()
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(model.DomainValidationResult{
-				Status:  "denied",
-				Domain:  domain,
-				Allowed: false,
-				StoreID: &store.ID,
-				Reason:  "Custom domain has not completed DNS ownership verification.",
+				Status:   "denied",
+				Domain:   domain,
+				Allowed:  false,
+				TenantID: &tenant.ID,
+				StoreID:  &tenant.ID,
+				Reason:   "Custom domain has not completed DNS ownership verification.",
 			})
 			return
 		}
 	}
 
-	log.Printf("[tls-validate] Approved tenant domain '%s' for store '%s' (%s)", domain, store.Name, store.ID)
+	log.Printf("[tls-validate] Approved tenant domain '%s' for workspace '%s' (%s)", domain, tenant.Name, tenant.ID)
 	metrics.DomainValidationsTotal.WithLabelValues("allowed", "tenant_active").Inc()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(model.DomainValidationResult{
-		Status:  "allowed",
-		Domain:  domain,
-		Allowed: true,
-		StoreID: &store.ID,
-		Reason:  "Tenant domain verified successfully.",
+		Status:   "allowed",
+		Domain:   domain,
+		Allowed:  true,
+		TenantID: &tenant.ID,
+		StoreID:  &tenant.ID,
+		Reason:   "Tenant domain verified successfully.",
 	})
 }
