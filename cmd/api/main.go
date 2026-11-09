@@ -65,6 +65,11 @@ func main() {
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.Timeout(60 * time.Second))
 
+	// Bot Traffic Control & Dynamic IP Rate Limiting (50 req/sec, burst of 100)
+	rateLimiter := middleware.NewIPRateLimiter(50.0, 100.0)
+	r.Use(middleware.RateLimitMiddleware(rateLimiter))
+	r.Use(middleware.BotControlMiddleware(false))
+
 	// Health check endpoint (for Docker, Caddy, Kubernetes)
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 *.exe
+*.crt
+*.key
 .env
 
 # Editor directories and files
