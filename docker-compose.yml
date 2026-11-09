@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: tenant_domains
     ports:
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d:ro
@@ -16,6 +16,23 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    mem_limit: 2048m
+    networks:
+      - tenant_net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: tenant_redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    mem_limit: 512m
     networks:
       - tenant_net
     restart: unless-stopped
@@ -27,17 +44,23 @@ services:
     container_name: tenant_app
     environment:
       SERVER_PORT: "8080"
-      ENV: "development"
+      ENV: "production"
       BASE_DOMAIN: "yourplatform.local"
       DATABASE_URL: "postgres://postgres:postgres@postgres:5432/tenant_domains?sslmode=disable"
+      REDIS_URL: "redis://redis:6379/0"
+      JWT_SECRET: "production-ready-secure-jwt-secret-key-32bytes-minimum"
+      SERVER_IP: "127.0.0.1"
       DB_MAX_OPEN_CONNS: "25"
       DB_MAX_IDLE_CONNS: "10"
       DB_CONN_MAX_LIFETIME: "5m"
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: 1024m
     networks:
       - tenant_net
     restart: unless-stopped
@@ -55,14 +78,76 @@ services:
       - caddy_config:/config
     depends_on:
       - app
+    mem_limit: 512m
     networks:
       - tenant_net
     restart: unless-stopped
 
+  # --- MONITORING PROFILE (Run with: docker compose --profile monitoring up -d) ---
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: tenant_prometheus
+    profiles: ["monitoring"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    mem_limit: 1024m
+    networks:
+      - tenant_net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: tenant_grafana
+    profiles: ["monitoring"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: adminpassword123
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./prometheus/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./prometheus/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    mem_limit: 512m
+    networks:
+      - tenant_net
+    restart: unless-stopped
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: tenant_postgres_exporter
+    profiles: ["monitoring"]
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres:5432/tenant_domains?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tenant_net
+    restart: unless-stopped
+
+  # --- TESTING PROFILE (Run with: docker compose --profile testing run --rm k6 ...) ---
+  k6:
+    image: grafana/k6:latest
+    container_name: tenant_k6
+    profiles: ["testing"]
+    volumes:
+      - ./tests/performance:/scripts:ro
+    networks:
+      - tenant_net
+
 volumes:
   postgres_data:
+  redis_data:
   caddy_data:
   caddy_config:
+  prometheus_data:
+  grafana_data:
 
 networks:
   tenant_net:

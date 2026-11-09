@@ -15,19 +15,22 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"multi-tenant-domains/internal/config"
 	"multi-tenant-domains/internal/database"
 	"multi-tenant-domains/internal/handler"
+	"multi-tenant-domains/internal/metrics"
 	"multi-tenant-domains/internal/middleware"
 	"multi-tenant-domains/internal/model"
 	"multi-tenant-domains/internal/repository"
+	"multi-tenant-domains/internal/service"
 )
 
-var version = "1.0.0"
+var version = "2.0.0"
 
 func main() {
-	log.Printf("[init] Starting Multi-Tenant Domain Microservice v%s...", version)
+	log.Printf("[init] Starting Production-Grade Multi-Tenant SaaS Platform v%s...", version)
 
 	// 1. Load configuration
 	cfg := config.LoadConfig()
@@ -44,28 +47,41 @@ func main() {
 		}
 	}()
 
-	// 3. Execute database migrations
+	// 3. Connect to Redis (graceful degradation if offline)
+	redisClient := database.NewRedisClient(cfg)
+	defer func() {
+		if redisClient != nil {
+			_ = redisClient.Close()
+		}
+	}()
+
+	// 4. Execute database migrations
 	if err := database.RunMigrations(db, cfg.MigrationsDir); err != nil {
 		log.Fatalf("[fatal] Schema migrations failed: %v", err)
 	}
 
-	// 4. Instantiate repositories and handlers
+	// 5. Instantiate services, repositories, and handlers
+	userRepo := repository.NewPostgresUserRepository(db)
 	storeRepo := repository.NewPostgresStoreRepository(db)
+	dnsVerifier := service.NewDNSVerifier()
+
+	authHandler := handler.NewAuthHandler(userRepo, cfg)
 	domainHandler := handler.NewDomainHandler(storeRepo, cfg)
-	storeHandler := handler.NewStoreHandler(storeRepo, cfg)
+	storeHandler := handler.NewStoreHandler(storeRepo, cfg, redisClient, dnsVerifier)
 	storefrontHandler := handler.NewStorefrontHandler(cfg)
 
-	// 5. Build router
+	// 6. Build Chi router
 	r := chi.NewRouter()
 
-	// Global standard middleware
+	// Global production middleware
 	r.Use(chiMiddleware.RequestID)
 	r.Use(chiMiddleware.RealIP)
 	r.Use(chiMiddleware.Logger)
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.Timeout(60 * time.Second))
+	r.Use(metrics.PrometheusMiddleware)
 
-	// Bot Traffic Control & Dynamic IP Rate Limiting (50 req/sec, burst of 100)
+	// Bot Traffic Control & Dynamic IP Rate Limiting (50 req/sec, burst 100)
 	rateLimiter := middleware.NewIPRateLimiter(50.0, 100.0)
 	r.Use(middleware.RateLimitMiddleware(rateLimiter))
 	r.Use(middleware.BotControlMiddleware(false))
@@ -78,21 +94,45 @@ func main() {
 			"status":    "ok",
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
 			"version":   version,
+			"database":  "connected",
+			"redis":     redisClient != nil,
 		})
 	})
 
-	// Platform API Routes (Caddy ask validation & store management)
+	// Prometheus Metrics Endpoint (internal monitoring)
+	r.Handle("/metrics", promhttp.Handler())
+
+	// Platform API Routes
 	r.Route("/api/v1", func(api chi.Router) {
-		// Caddy On-Demand TLS Verification Hook
+		// Public Authentication Routes
+		api.Route("/auth", func(auth chi.Router) {
+			auth.Post("/register", authHandler.Register)
+			auth.Post("/login", authHandler.Login)
+
+			// Authenticated Profile Route
+			auth.Group(func(protected chi.Router) {
+				protected.Use(middleware.AuthMiddleware(cfg.JWTSecret))
+				protected.Get("/me", authHandler.Me)
+			})
+		})
+
+		// Caddy On-Demand TLS Verification Hook (Public)
 		api.Get("/domains/validate", domainHandler.ValidateDomain)
 
-		// Tenant Store Management
+		// Tenant Store Routes
 		api.Route("/stores", func(stores chi.Router) {
-			stores.Post("/", storeHandler.CreateStore)
-			stores.Get("/", storeHandler.ListStores)
+			// Public store lookup by ID
 			stores.Get("/{id}", storeHandler.GetStore)
-			stores.Post("/{id}/custom-domain", storeHandler.ConnectCustomDomain)
-			stores.Delete("/{id}/custom-domain", storeHandler.DisconnectCustomDomain)
+
+			// Authenticated Store & Domain Management Routes
+			stores.Group(func(protected chi.Router) {
+				protected.Use(middleware.AuthMiddleware(cfg.JWTSecret))
+				protected.Get("/", storeHandler.ListStores)
+				protected.Post("/", storeHandler.CreateStore)
+				protected.Post("/{id}/custom-domain", storeHandler.ConnectCustomDomain)
+				protected.Post("/{id}/verify-domain", storeHandler.VerifyCustomDomain)
+				protected.Delete("/{id}/custom-domain", storeHandler.DisconnectCustomDomain)
+			})
 		})
 	})
 
@@ -105,29 +145,32 @@ func main() {
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		cleanedHost := model.CleanDomain(r.Host)
 
-		// If accessed via system/platform host and requesting the root/docs
+		// 1. If accessed via system/platform host, display platform API index
 		if systemHostsMap[cleanedHost] {
 			if r.URL.Path == "/" || r.URL.Path == "" {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
-					"service":     "multi-tenant-domain-service",
+					"service":     "multi-tenant-saas-platform",
 					"version":     version,
 					"base_domain": cfg.BaseDomain,
 					"status":      "running",
 					"endpoints": map[string]string{
 						"health":                "GET /healthz",
+						"metrics":               "GET /metrics",
+						"register":              "POST /api/v1/auth/register",
+						"login":                 "POST /api/v1/auth/login",
+						"profile":               "GET /api/v1/auth/me",
 						"caddy_tls_validate":    "GET /api/v1/domains/validate?domain={domain}",
-						"create_store":          "POST /api/v1/stores",
 						"list_stores":           "GET /api/v1/stores",
-						"get_store":             "GET /api/v1/stores/{id}",
+						"create_store":          "POST /api/v1/stores",
 						"connect_custom_domain": "POST /api/v1/stores/{id}/custom-domain",
+						"verify_domain":         "POST /api/v1/stores/{id}/verify-domain",
 					},
 				})
 				return
 			}
 
-			// If unknown endpoint on system host
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(map[string]string{
@@ -137,17 +180,25 @@ func main() {
 			return
 		}
 
-		// Otherwise, resolve tenant store from host header
-		store, err := storeRepo.ResolveStoreByHost(r.Context(), cleanedHost, cfg.BaseDomain)
-		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"error":   "Tenant store not found",
-				"host":    cleanedHost,
-				"message": fmt.Sprintf("No active store registered for domain '%s'", cleanedHost),
-			})
-			return
+		// 2. Resolve tenant store (First check Redis cache, fallback to PostgreSQL)
+		var store *model.Store
+		if cached, found := redisClient.GetCachedStore(r.Context(), cleanedHost); found {
+			store = cached
+		} else {
+			dbStore, err := storeRepo.ResolveStoreByHost(r.Context(), cleanedHost, cfg.BaseDomain)
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":   "Tenant store not found",
+					"host":    cleanedHost,
+					"message": fmt.Sprintf("No active store registered for domain '%s'", cleanedHost),
+				})
+				return
+			}
+			store = dbStore
+			// Cache resolved store for 10 minutes
+			redisClient.SetCachedStore(r.Context(), cleanedHost, store, 10*time.Minute)
 		}
 
 		if !store.IsActive {
@@ -161,12 +212,12 @@ func main() {
 			return
 		}
 
-		// Inactive checks passed, inject tenant into context and serve storefront
+		// Inject tenant store into request context and serve storefront
 		ctx := middleware.WithTenant(r.Context(), store)
 		storefrontHandler.ServeStorefront(w, r.WithContext(ctx))
 	})
 
-	// 6. Start HTTP Server with Graceful Shutdown
+	// 7. Start HTTP Server with Graceful Shutdown
 	addr := fmt.Sprintf("0.0.0.0:%s", cfg.ServerPort)
 	srv := &http.Server{
 		Addr:         addr,

@@ -11,6 +11,15 @@
         issuer internal
     }
 
+    # Standard Production Security Headers
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        -Server
+    }
+
     reverse_proxy app:8080 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -20,10 +29,6 @@
 }
 
 :80 {
-    reverse_proxy app:8080 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto http
-    }
+    # Automatic HTTP to HTTPS canonical redirection
+    redir https://{host}{uri} permanent
 }

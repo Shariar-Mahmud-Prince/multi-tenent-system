@@ -45,9 +45,20 @@ func (m *mockStoreRepo) ResolveStoreByHost(ctx context.Context, host string, bas
 func (m *mockStoreRepo) UpdateCustomDomain(ctx context.Context, id uuid.UUID, customDomain *string) error {
 	return nil
 }
-func (m *mockStoreRepo) DeleteCustomDomain(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *mockStoreRepo) UpdateCustomDomainWithVerification(ctx context.Context, id uuid.UUID, ownerID *uuid.UUID, customDomain string, token string, expiresAt time.Time) error {
+	return nil
+}
+func (m *mockStoreRepo) UpdateDomainStatus(ctx context.Context, id uuid.UUID, status string) error {
+	return nil
+}
+func (m *mockStoreRepo) DeleteCustomDomain(ctx context.Context, id uuid.UUID, ownerID *uuid.UUID) error {
+	return nil
+}
 func (m *mockStoreRepo) ListStores(ctx context.Context, limit, offset int) ([]*model.Store, int, error) {
 	return []*model.Store{m.store}, 1, nil
+}
+func (m *mockStoreRepo) ListStoresByOwner(ctx context.Context, ownerID uuid.UUID) ([]*model.Store, error) {
+	return []*model.Store{m.store}, nil
 }
 
 func TestTenantMiddleware_ValidTenant(t *testing.T) {

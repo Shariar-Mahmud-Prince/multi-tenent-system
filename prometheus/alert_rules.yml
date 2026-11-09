@@ -1,0 +1,47 @@
+groups:
+  - name: saas_platform_alerts
+    rules:
+      - alert: HighHttp5xxErrorRate
+        expr: (sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))) * 100 > 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High HTTP 5xx error rate detected on SaaS API"
+          description: "Over 5% of incoming API requests returned HTTP 5xx status codes in the last 5 minutes."
+
+      - alert: SlowApiResponses
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 1.0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p95 HTTP latency on SaaS API"
+          description: "95th percentile request latency exceeds 1.0 second over 3 minutes."
+
+      - alert: PostgresServiceDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: disaster
+        annotations:
+          summary: "PostgreSQL database instance is down"
+          description: "Postgres exporter reports database connectivity is unavailable."
+
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory utilization exceeds 85%"
+          description: "Redis instance memory usage is approaching configured eviction threshold."
+
+      - alert: HighContainerCpuUsage
+        expr: (sum(rate(container_cpu_usage_seconds_total{name=~"tenant_.*"}[5m])) by (name) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container CPU usage exceeds 85%"
+          description: "Container {{ $labels.name }} CPU usage is sustained above 85%."

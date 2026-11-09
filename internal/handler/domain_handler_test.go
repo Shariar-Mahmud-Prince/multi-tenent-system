@@ -76,22 +76,54 @@ func (m *mockStoreRepository) ResolveStoreByHost(ctx context.Context, host strin
 	return nil, repository.ErrStoreNotFound
 }
 
-func (m *mockStoreRepository) UpdateCustomDomain(ctx context.Context, id uuid.UUID, customDomain *string) error {
+func (m *mockStoreRepository) UpdateCustomDomainWithVerification(ctx context.Context, id uuid.UUID, ownerID *uuid.UUID, customDomain string, token string, expiresAt time.Time) error {
 	for _, s := range m.stores {
 		if s.ID == id {
-			s.CustomDomain = customDomain
+			s.CustomDomain = &customDomain
+			s.VerificationToken = &token
+			s.VerificationExpiresAt = &expiresAt
+			s.DomainStatus = model.DomainStatusPending
 			return nil
 		}
 	}
 	return repository.ErrStoreNotFound
 }
 
-func (m *mockStoreRepository) DeleteCustomDomain(ctx context.Context, id uuid.UUID) error {
-	return m.UpdateCustomDomain(ctx, id, nil)
+func (m *mockStoreRepository) UpdateDomainStatus(ctx context.Context, id uuid.UUID, status string) error {
+	for _, s := range m.stores {
+		if s.ID == id {
+			s.DomainStatus = status
+			return nil
+		}
+	}
+	return repository.ErrStoreNotFound
+}
+
+func (m *mockStoreRepository) DeleteCustomDomain(ctx context.Context, id uuid.UUID, ownerID *uuid.UUID) error {
+	for _, s := range m.stores {
+		if s.ID == id {
+			s.CustomDomain = nil
+			s.DomainStatus = model.DomainStatusActive
+			s.VerificationToken = nil
+			s.VerificationExpiresAt = nil
+			return nil
+		}
+	}
+	return repository.ErrStoreNotFound
 }
 
 func (m *mockStoreRepository) ListStores(ctx context.Context, limit, offset int) ([]*model.Store, int, error) {
 	return m.stores, len(m.stores), nil
+}
+
+func (m *mockStoreRepository) ListStoresByOwner(ctx context.Context, ownerID uuid.UUID) ([]*model.Store, error) {
+	var results []*model.Store
+	for _, s := range m.stores {
+		if s.OwnerID != nil && *s.OwnerID == ownerID {
+			results = append(results, s)
+		}
+	}
+	return results, nil
 }
 
 func setupTestDomainHandler() (*handler.DomainHandler, *mockStoreRepository, *config.Config) {
@@ -109,6 +141,7 @@ func setupTestDomainHandler() (*handler.DomainHandler, *mockStoreRepository, *co
 				Name:         "Acme Store",
 				Subdomain:    "acme",
 				CustomDomain: &custom,
+				DomainStatus: model.DomainStatusActive,
 				IsActive:     true,
 			},
 			{
@@ -116,6 +149,7 @@ func setupTestDomainHandler() (*handler.DomainHandler, *mockStoreRepository, *co
 				Name:         "Inactive Store",
 				Subdomain:    "inactive",
 				CustomDomain: &inactiveCustom,
+				DomainStatus: model.DomainStatusActive,
 				IsActive:     false,
 			},
 		},

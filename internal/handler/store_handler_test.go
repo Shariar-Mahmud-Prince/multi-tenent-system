@@ -17,7 +17,7 @@ import (
 )
 
 func setupStoreHandlerRouter(repo *mockStoreRepository, cfg *config.Config) http.Handler {
-	sh := handler.NewStoreHandler(repo, cfg)
+	sh := handler.NewStoreHandler(repo, cfg, nil, nil)
 	r := chi.NewRouter()
 
 	r.Route("/api/v1/stores", func(stores chi.Router) {

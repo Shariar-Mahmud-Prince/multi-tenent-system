@@ -11,14 +11,15 @@ import (
 )
 
 var (
-	// Block suspicious scrapers, vulnerability scanners, and malicious bots
-	maliciousUserAgentRegex = regexp.MustCompile(`(?i)(sqlmap|nikto|masscan|zgrab|acunetix|dirbuster|nmap|censys|shodan|python-requests|curl\/|wget|go-http-client)`)
+	// Block hostile scanners and automated attack tools unconditionally
+	vulnerabilityScannerRegex = regexp.MustCompile(`(?i)(sqlmap|nikto|masscan|zgrab|acunetix|dirbuster|nmap|censys|shodan|wpscan)`)
+	// Developer tools and generic HTTP clients blocked in strict mode
+	devScraperRegex = regexp.MustCompile(`(?i)(python-requests|curl\/|wget|go-http-client)`)
 	// Friendly search engine bots we allow but monitor
 	searchEngineRegex = regexp.MustCompile(`(?i)(googlebot|bingbot|yandex|duckduckbot|slurp|baiduspider)`)
 )
 
 // BotControlMiddleware filters out aggressive scrapers and malicious automated scanners.
-// Note: curl / go-http-client are only checked on storefront paths if strict bot mode is enabled.
 func BotControlMiddleware(strict bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,15 +36,25 @@ func BotControlMiddleware(strict bool) func(http.Handler) http.Handler {
 				return
 			}
 
-			// 2. Block known malicious vulnerability tools
-			if strict && !strings.HasPrefix(r.URL.Path, "/api/v1") && r.URL.Path != "/healthz" {
-				// Don't block legitimate search engine crawlers
-				if !searchEngineRegex.MatchString(ua) && maliciousUserAgentRegex.MatchString(ua) {
+			// 2. Block hostile vulnerability tools unconditionally on storefront routes
+			if !strings.HasPrefix(r.URL.Path, "/api/v1") && r.URL.Path != "/healthz" {
+				if vulnerabilityScannerRegex.MatchString(ua) {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusForbidden)
 					_ = json.NewEncoder(w).Encode(map[string]string{
 						"error":  "Access Denied",
 						"reason": "Automated security scanning tool detected",
+					})
+					return
+				}
+
+				// 3. In strict mode, also block generic script clients
+				if strict && !searchEngineRegex.MatchString(ua) && devScraperRegex.MatchString(ua) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusForbidden)
+					_ = json.NewEncoder(w).Encode(map[string]string{
+						"error":  "Access Denied",
+						"reason": "Generic automated script client blocked in strict mode",
 					})
 					return
 				}

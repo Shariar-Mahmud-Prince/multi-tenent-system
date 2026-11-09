@@ -11,42 +11,98 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	DomainStatusPending      = "pending_verification"
+	DomainStatusVerified     = "verified"
+	DomainStatusProvisioning = "provisioning"
+	DomainStatusActive       = "active"
+	DomainStatusFailed       = "failed"
+	DomainStatusSuspended    = "suspended"
+)
+
 var (
 	subdomainRegex   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{1,61}[a-z0-9])?$`)
 	domainRegex      = regexp.MustCompile(`^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$`)
 	reservedSubnames = map[string]bool{
-		"admin":    true,
-		"api":      true,
-		"app":      true,
-		"caddy":    true,
-		"dev":      true,
-		"internal": true,
-		"mail":     true,
-		"root":     true,
-		"ssl":      true,
-		"staging":  true,
-		"status":   true,
-		"system":   true,
-		"test":     true,
-		"tls":      true,
-		"www":      true,
+		"admin":      true,
+		"api":        true,
+		"app":        true,
+		"caddy":      true,
+		"dev":        true,
+		"grafana":    true,
+		"internal":   true,
+		"mail":       true,
+		"monitor":    true,
+		"prometheus": true,
+		"root":       true,
+		"ssl":        true,
+		"staging":    true,
+		"status":     true,
+		"system":     true,
+		"test":       true,
+		"tls":        true,
+		"www":        true,
 	}
 )
 
 // Store represents a tenant store in the database.
 type Store struct {
-	ID           uuid.UUID `json:"id"`
-	Name         string    `json:"name"`
-	Subdomain    string    `json:"subdomain"`
-	CustomDomain *string   `json:"custom_domain,omitempty"`
-	IsActive     bool      `json:"is_active"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                    uuid.UUID  `json:"id"`
+	OwnerID               *uuid.UUID `json:"owner_id,omitempty"`
+	Name                  string     `json:"name"`
+	Subdomain             string     `json:"subdomain"`
+	CustomDomain          *string    `json:"custom_domain,omitempty"`
+	DomainStatus          string     `json:"domain_status"`
+	VerificationToken     *string    `json:"verification_token,omitempty"`
+	VerificationExpiresAt *time.Time `json:"verification_expires_at,omitempty"`
+	IsActive              bool       `json:"is_active"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
-// FullSubdomain returns the complete subdomain URL host e.g. "acme.yourplatform.test".
+// FullSubdomain returns the complete subdomain URL host e.g. "acme.yourplatform.local".
 func (s *Store) FullSubdomain(baseDomain string) string {
 	return fmt.Sprintf("%s.%s", strings.ToLower(s.Subdomain), strings.ToLower(baseDomain))
+}
+
+// DNSInstructions outlines how the store owner configures DNS at their registrar.
+type DNSInstructions struct {
+	CustomDomain string `json:"custom_domain"`
+	TXTRecord    struct {
+		Host  string `json:"host"`
+		Value string `json:"value"`
+	} `json:"txt_record"`
+	CNAMERecord struct {
+		Host   string `json:"host"`
+		Target string `json:"target"`
+	} `json:"cname_record"`
+	ARecord struct {
+		Host string `json:"host"`
+		IPv4 string `json:"ipv4"`
+	} `json:"a_record"`
+}
+
+// GenerateDNSInstructions builds DNS setup instructions for a custom domain.
+func (s *Store) GenerateDNSInstructions(baseDomain, serverIP string) DNSInstructions {
+	var instr DNSInstructions
+	if s.CustomDomain == nil || s.VerificationToken == nil {
+		return instr
+	}
+
+	cd := *s.CustomDomain
+	token := *s.VerificationToken
+
+	instr.CustomDomain = cd
+	instr.TXTRecord.Host = "_saas-verify." + cd
+	instr.TXTRecord.Value = "token=" + token
+
+	instr.CNAMERecord.Host = cd
+	instr.CNAMERecord.Target = s.FullSubdomain(baseDomain)
+
+	instr.ARecord.Host = cd
+	instr.ARecord.IPv4 = serverIP
+
+	return instr
 }
 
 // CreateStoreRequest contains the payload for creating a new store.
@@ -159,27 +215,43 @@ func ValidateCustomDomain(domain string, baseDomain string) error {
 
 // StoreResponse is the serialized representation returned to clients.
 type StoreResponse struct {
-	ID           uuid.UUID `json:"id"`
-	Name         string    `json:"name"`
-	Subdomain    string    `json:"subdomain"`
-	SubdomainURL string    `json:"subdomain_url"`
-	CustomDomain *string   `json:"custom_domain,omitempty"`
-	IsActive     bool      `json:"is_active"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                    uuid.UUID        `json:"id"`
+	OwnerID               *uuid.UUID       `json:"owner_id,omitempty"`
+	Name                  string           `json:"name"`
+	Subdomain             string           `json:"subdomain"`
+	SubdomainURL          string           `json:"subdomain_url"`
+	CustomDomain          *string          `json:"custom_domain,omitempty"`
+	DomainStatus          string           `json:"domain_status"`
+	VerificationToken     *string          `json:"verification_token,omitempty"`
+	VerificationExpiresAt *time.Time       `json:"verification_expires_at,omitempty"`
+	DNSInstructions       *DNSInstructions `json:"dns_instructions,omitempty"`
+	IsActive              bool             `json:"is_active"`
+	CreatedAt             time.Time        `json:"created_at"`
+	UpdatedAt             time.Time        `json:"updated_at"`
 }
 
 // ToResponse converts a Store model to a StoreResponse DTO.
-func (s *Store) ToResponse(baseDomain string) StoreResponse {
+func (s *Store) ToResponse(baseDomain string, serverIP string) StoreResponse {
+	var dnsInstr *DNSInstructions
+	if s.CustomDomain != nil && s.DomainStatus == DomainStatusPending {
+		d := s.GenerateDNSInstructions(baseDomain, serverIP)
+		dnsInstr = &d
+	}
+
 	return StoreResponse{
-		ID:           s.ID,
-		Name:         s.Name,
-		Subdomain:    s.Subdomain,
-		SubdomainURL: fmt.Sprintf("https://%s.%s", s.Subdomain, baseDomain),
-		CustomDomain: s.CustomDomain,
-		IsActive:     s.IsActive,
-		CreatedAt:    s.CreatedAt,
-		UpdatedAt:    s.UpdatedAt,
+		ID:                    s.ID,
+		OwnerID:               s.OwnerID,
+		Name:                  s.Name,
+		Subdomain:             s.Subdomain,
+		SubdomainURL:          fmt.Sprintf("https://%s.%s", s.Subdomain, baseDomain),
+		CustomDomain:          s.CustomDomain,
+		DomainStatus:          s.DomainStatus,
+		VerificationToken:     s.VerificationToken,
+		VerificationExpiresAt: s.VerificationExpiresAt,
+		DNSInstructions:       dnsInstr,
+		IsActive:              s.IsActive,
+		CreatedAt:             s.CreatedAt,
+		UpdatedAt:             s.UpdatedAt,
 	}
 }
 

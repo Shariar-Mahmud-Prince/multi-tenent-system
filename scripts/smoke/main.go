@@ -75,14 +75,36 @@ func main() {
 		resp.Body.Close()
 	}
 
-	// 6. Store Creation REST API
+	// 6. User Authentication & Store Creation REST API
+	authPayload := map[string]string{
+		"email":    fmt.Sprintf("smoke-%d@saas.local", time.Now().Unix()),
+		"password": "SmokePassword123!",
+		"role":     "owner",
+	}
+	authBytes, _ := json.Marshal(authPayload)
+	authResp, err := client.Post("http://localhost:8080/api/v1/auth/register", "application/json", bytes.NewReader(authBytes))
+	token := ""
+	if err == nil && authResp != nil && authResp.StatusCode == http.StatusCreated {
+		var authData struct {
+			Token string `json:"token"`
+		}
+		_ = json.NewDecoder(authResp.Body).Decode(&authData)
+		token = authData.Token
+		authResp.Body.Close()
+	}
+
 	storePayload := map[string]interface{}{
 		"name":      fmt.Sprintf("Smoke Store %d", time.Now().Unix()),
 		"subdomain": fmt.Sprintf("smoke-%d", time.Now().Unix()%10000),
 	}
 	payloadBytes, _ := json.Marshal(storePayload)
-	resp, err = client.Post("http://localhost:8080/api/v1/stores", "application/json", bytes.NewReader(payloadBytes))
-	check("Store Management API (Create Store)", err == nil && resp != nil && resp.StatusCode == http.StatusCreated, fmt.Sprintf("Created store subdomain '%s'", storePayload["subdomain"]))
+	reqStore, _ := http.NewRequest(http.MethodPost, "http://localhost:8080/api/v1/stores", bytes.NewReader(payloadBytes))
+	reqStore.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		reqStore.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err = client.Do(reqStore)
+	check("Store Management API (Create Store with JWT)", err == nil && resp != nil && resp.StatusCode == http.StatusCreated, fmt.Sprintf("Created store subdomain '%s'", storePayload["subdomain"]))
 	if resp != nil {
 		resp.Body.Close()
 	}
