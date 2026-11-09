@@ -1,4 +1,4 @@
-# Production Multi-Tenant SaaS Platform Foundation
+# multi-tenent-system
 
 A production-grade, white-label **Multi-Tenant SaaS Foundation Architecture** featuring a high-performance **Go backend**, a modular **React (Vite + TypeScript + Tailwind) frontend**, **PostgreSQL 16**, **Redis 7**, **Caddy v2 with On-Demand TLS**, and **Prometheus/Grafana observability**.
 
